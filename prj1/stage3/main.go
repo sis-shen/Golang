@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -54,25 +55,22 @@ func con_add(num int) {
 func main() {
 	var wg sync.WaitGroup
 	wg.Add(1)
-	stopCh := make(chan bool)
+	ctx, stop := context.WithCancel(context.Background())
 	go func() {
 		defer wg.Done()
-		watchDog(stopCh, "【看门狗】")
+		watchDog(ctx, "【看门狗】")
 	}()
-	time.Sleep(2 * time.Second)
-	fmt.Println("发送假的指令")
-	stopCh <- false
 	time.Sleep(5 * time.Second)
 	fmt.Println("发送真的指令")
-	stopCh <- true //法停止指令
+	stop()
 	wg.Wait()
 }
 
-func watchDog(stopCh chan bool, name string) {
+func watchDog(ctx context.Context, name string) {
 	// 开启 for select 循环
 	for {
 		select {
-		case <-stopCh:
+		case <-ctx.Done():
 			fmt.Println(name, "停止指令已收到，马上停止")
 			return
 		default:
