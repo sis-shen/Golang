@@ -55,6 +55,18 @@ func time_pattern(ctx context.Context, ch chan int) {
 	}
 }
 
+func perchase(ctx context.Context, inCh chan int, outCh chan int) {
+	for {
+		select {
+		case <-ctx.Done():
+			fmt.Printf("perchase, done\n")
+			return
+		default:
+
+		}
+	}
+}
+
 func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	wg := sync.WaitGroup{}
