@@ -55,30 +55,45 @@ func time_pattern(ctx context.Context, ch chan int) {
 	}
 }
 
-func perchase(ctx context.Context, inCh chan int, outCh chan int) {
+func perchase(ctx context.Context, inCh <-chan int, outCh chan int) {
+	defer fmt.Printf("perchase, done\n")
+	defer close(outCh)
 	for {
 		select {
 		case <-ctx.Done():
-			fmt.Printf("perchase, done\n")
 			return
-		case num := <-inCh:
+		case num, ok := <-inCh:
+			if !ok {
+				return
+			}
 			fmt.Printf("inCh: 采购了%d\n", num)
-			outCh <- num
+			select {
+			case <-ctx.Done():
+				return
+			case outCh <- num:
+			}
 		}
 	}
+
 }
 
-func machine(ctx context.Context, inCh chan int, outCh chan int) {
+func machine(ctx context.Context, inCh <-chan int, outCh chan int) {
+	defer fmt.Printf("machine, done\n")
+	defer close(outCh)
+
 	for {
 		select {
 		case <-ctx.Done():
-			fmt.Printf("machine, done\n")
 			return
 		case num := <-inCh:
 			fmt.Printf("machine:收到加工任务%d\n", num)
 			for i := 0; i < num; i++ {
 				fmt.Printf("machine:正在加工一个产品，编号%d\n", i)
-				outCh <- 1
+				select {
+				case <-ctx.Done():
+					return
+				case outCh <- 1:
+				}
 				time.Sleep(1 * time.Second)
 			}
 			fmt.Printf("inCh: 生产了%d\n", num)
@@ -86,11 +101,11 @@ func machine(ctx context.Context, inCh chan int, outCh chan int) {
 	}
 }
 
-func sell(ctx context.Context, inCh chan int, outCh chan int) {
+func sell(ctx context.Context, inCh <-chan int) {
+	defer fmt.Printf("sell, done\n")
 	for {
 		select {
 		case <-ctx.Done():
-			fmt.Printf("sell, done\n")
 			return
 		case num := <-inCh:
 			fmt.Printf("sell:获取到销售任务%d\n", num)
@@ -98,44 +113,14 @@ func sell(ctx context.Context, inCh chan int, outCh chan int) {
 				fmt.Printf("sell:卖出去了一个产品，编号%d\n", i)
 				time.Sleep(1 * time.Second)
 			}
-			outCh <- num
 			fmt.Printf("本批次任务完成，共计产品%d\n", num)
 		}
 
 	}
 }
 
-func test_pipeline() {
-	inPerchaseCh := make(chan int)
-	outPerchaseCh := make(chan int)
-	outMachineCh := make(chan int)
-	outSellCh := make(chan int)
-	perchaseCtx, perchaseCancel := context.WithCancel(context.Background())
-	machineCtx, machineCancel := context.WithCancel(context.Background())
-	sellCtx, sellCancel := context.WithCancel(context.Background())
-
-	wg := &sync.WaitGroup{}
-	wg.Add(3)
-
-	go func() {
-		defer wg.Done()
-		perchase(perchaseCtx, inPerchaseCh, outPerchaseCh)
-	}()
-
-	go func() {
-		defer wg.Done()
-		machine(machineCtx, outPerchaseCh, outMachineCh)
-	}()
-
-	go func() {
-		defer wg.Done()
-		sell(sellCtx, outMachineCh, outSellCh)
-	}()
-
-	defer wg.Wait()
-}
-
-func main() {
+func test_select_pattern() {
+	fmt.Println("----------- test select_pattern --------------\n")
 	ctx, cancel := context.WithCancel(context.Background())
 	wg := sync.WaitGroup{}
 	wg.Add(1)
@@ -146,11 +131,14 @@ func main() {
 	time.Sleep(10 * time.Second)
 	cancel()
 	wg.Wait()
+}
 
-	fmt.Println("-------stage2------------")
+func test_select_range_pattern() {
+	fmt.Println("-------test select_range_pattern --------------\n")
+	wg := sync.WaitGroup{}
 	wg = sync.WaitGroup{}
 	wg.Add(1)
-	ctx, cancel = context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
 		defer wg.Done()
 		select_range_pattern(ctx, []int{1, 2, 3, 4, 5})
@@ -158,11 +146,14 @@ func main() {
 	time.Sleep(10 * time.Second)
 	cancel()
 	wg.Wait()
+}
 
-	fmt.Println("-------stage3------------")
+func test_time_pattern() {
+	fmt.Println("----------- test time_pattern --------------\n")
+	wg := sync.WaitGroup{}
 	wg = sync.WaitGroup{}
 	wg.Add(1)
-	ctx, cancel = context.WithCancel(context.Background())
+	ctx, _ := context.WithCancel(context.Background())
 	ch := make(chan int)
 	go func() {
 		fmt.Println("发起了一个请求:")
@@ -175,4 +166,126 @@ func main() {
 		time_pattern(ctx, ch)
 	}()
 	wg.Wait()
+}
+
+func merge(ins ...<-chan int) <-chan int {
+	out := make(chan int)
+	wg := sync.WaitGroup{}
+
+	ch_merge := func(c <-chan int) {
+		defer wg.Done()
+		for n := range c {
+			out <- n
+		}
+	}
+
+	wg.Add(len(ins))
+
+	for _, in := range ins {
+		go ch_merge(in)
+	}
+
+	go func() {
+		wg.Wait()
+		close(out)
+	}()
+	return out
+}
+
+func test_pipeline() {
+	fmt.Println("----------- test pipeline --------------\n")
+	//初始化变量
+	inPerchaseCh := make(chan int)
+	outPerchaseCh1 := make(chan int)
+	outPerchaseCh2 := make(chan int)
+	outPerchaseCh3 := make(chan int)
+	outMachineCh := make(chan int)
+	ctx, cancel := context.WithCancel(context.Background())
+	wg := &sync.WaitGroup{}
+	wg.Add(5)
+
+	//启动管线
+	go func() {
+		defer wg.Done()
+		perchase(ctx, inPerchaseCh, outPerchaseCh1)
+	}()
+
+	go func() {
+		defer wg.Done()
+		perchase(ctx, inPerchaseCh, outPerchaseCh2)
+	}()
+
+	go func() {
+		defer wg.Done()
+		perchase(ctx, inPerchaseCh, outPerchaseCh3)
+	}()
+
+	outPerchaseCh := merge(outPerchaseCh1, outPerchaseCh2, outPerchaseCh3)
+
+	go func() {
+		defer wg.Done()
+		machine(ctx, outPerchaseCh, outMachineCh)
+	}()
+
+	go func() {
+		defer wg.Done()
+		sell(ctx, outMachineCh)
+	}()
+
+	//开始输入
+	inPerchaseCh <- 10
+	time.Sleep(5 * time.Second)
+	//inPerchaseCh <- 20
+
+	time.Sleep(20 * time.Second)
+	//销毁管线
+	close(inPerchaseCh)
+	cancel()
+	cancel()
+	cancel()
+	wg.Wait()
+
+}
+
+func boilWater() <-chan string {
+	waterCh := make(chan string)
+	go func() {
+		for i := 0; i < 5; i++ {
+			fmt.Printf("烧水中...%d秒\n", i)
+			time.Sleep(1 * time.Second)
+		}
+		waterCh <- "水烧好了\n"
+	}()
+	return waterCh
+}
+
+func cleanTable() <-chan string {
+	waterCh := make(chan string)
+	go func() {
+		for i := 0; i < 8; i++ {
+			fmt.Printf("擦桌子中...%d秒\n", i)
+			time.Sleep(1 * time.Second)
+		}
+		waterCh <- "桌子擦好了\n"
+	}()
+	return waterCh
+}
+
+func test_future() {
+	waterCh := boilWater()
+	tableCh := cleanTable()
+
+	water := <-waterCh
+	fmt.Printf(water)
+	table := <-tableCh
+	fmt.Printf(table)
+	fmt.Printf("Party Start!!!\n")
+}
+
+func main() {
+	//test_select_pattern()
+	//test_select_range_pattern()
+	//test_time_pattern()
+	//test_pipeline()
+	test_future()
 }
